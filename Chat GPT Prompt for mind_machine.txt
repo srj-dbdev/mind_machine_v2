@@ -1,0 +1,134 @@
+I'm building an end-to-end AI-powered Instagram Reels automation platform in Python.
+
+Current Stack
+Python 3.14
+PostgreSQL
+FFmpeg
+OpenAI GPT-4.1-mini
+Edge-TTS
+Pexels Video API
+NewsAPI
+dotenv
+Current Pipeline
+Fetch latest news from NewsAPI.
+Store news in PostgreSQL.
+Send the complete news article (title, description, content, source) to GPT.
+GPT returns structured JSON instead of plain text.
+
+Example:
+
+{
+  "title": "...",
+  "hook": "...",
+  "cta": "...",
+  "style": "...",
+  "music_mood": "...",
+  "scenes": [
+    {
+      "order": 1,
+      "text": "...",
+      "keyword": "...",
+      "overlay": "...",
+      "mood": "...",
+      "duration": 3
+    }
+  ]
+}
+audio_utils.py builds narration using:
+hook
+all scene.text values
+CTA
+Edge-TTS converts narration to MP3.
+GPT generates visual keywords from the structured JSON.
+Pexels downloader searches each keyword and downloads the best matching clips.
+
+Current downloader already:
+
+prefers vertical clips
+prefers higher resolution
+avoids duplicate Pexels IDs
+downloads multiple candidates
+FFmpeg normalizes clips to:
+1080x1920
+30fps
+H264
+Renderer concatenates clips and overlays narration.
+Current Goal
+
+I want to transform this from a "clip concatenator" into a professional AI Reel generator.
+
+The next architecture should be SCENE-BASED rather than CLIP-BASED.
+
+Each scene in the JSON should control:
+
+narration
+keyword
+overlay text
+duration
+transition
+clip selection
+
+Instead of concatenating every downloaded clip, the renderer should:
+
+Pick ONE best clip per scene.
+Trim it to the scene duration.
+Concatenate scenes.
+Overlay narration.
+Add captions.
+Add transitions.
+Add background music.
+
+The final video duration should exactly equal the narration duration.
+
+Planned Features
+
+Phase 1
+
+One clip per scene
+Dynamic scene duration
+Perfect narration synchronization
+
+Phase 2
+
+Animated captions
+Crossfade transitions
+Background music ducking
+
+Phase 3
+
+Better visual selection
+Semantic keyword expansion
+Camera-angle diversity
+Avoid repetitive footage
+
+Phase 4
+
+AI-generated B-roll when stock footage isn't available
+Multiple reel styles
+Branding
+Auto outro
+Thumbnail generation
+Future Vision
+
+This project is becoming an AI Content Factory.
+
+Eventually it should automatically:
+
+Collect trending news
+Generate scripts
+Generate storyboard
+Download or generate visuals
+Produce professional Reels
+Upload to Instagram
+Upload to YouTube Shorts
+Upload to TikTok
+Generate titles
+Generate hashtags
+Generate thumbnails
+Schedule posts
+Track analytics
+Learn which content performs best
+
+I want the codebase to remain modular, scalable, production-ready, and maintainable.
+
+Please continue from this architecture, suggest best practices where appropriate, and provide complete updated Python files whenever multiple components need coordinated changes.

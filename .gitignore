@@ -1,0 +1,20 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Generated media files
+*.mp4
+*.mp3
+*.wav
+*.aac
+
+
+# OS junk
+.DS_Store
+Thumbs.db
