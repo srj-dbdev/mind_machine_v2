@@ -95,32 +95,55 @@ Rules
 
 2. Never invent facts.
 
-3. Entire narration should be about 15 seconds.
+3. Entire narration should be about 45 seconds.
 
-4. Use between 3 and 6 scenes depending on the story.
+4. Use between 8 and 10 scenes depending on the story.
 
 5. Each scene should contain ONE short sentence.
 
-6. The keyword must describe visuals, not headlines.
+6. The keyword must describe visuals specific to THIS story.
 
-GOOD keywords
+Think like a camera operator: what would you actually film for THIS story?
+- Company products or assets (rocket, factory, data center)
+- Specific people or roles (astronaut, surgeon, trader on floor)
+- Concrete locations tied to this story (Cape Canaveral, Capitol Hill)
+- Specific actions described (rocket launch, signing a bill, protest march)
+- Physical objects mentioned (satellite, server rack, oil pipeline)
+
+GOOD keywords — story-specific examples
+
+Falcon 9 rocket
+rocket launch
+SpaceX launch pad
+Microsoft headquarters
+stock trader screen
+Elon Musk
+Cape Canaveral
+satellite orbit
+court hearing
+oil refinery
+soldiers marching
+hospital emergency room
+election ballot
+solar panel farm
+
+BAD keywords — never use these
 
 financial district
 stock exchange
-AI servers
-electric cars
-factory workers
-satellite launch
-hospital
-courtroom
-government building
-cargo ship
-
-BAD keywords
-
+business meeting
+technology
+economy
+markets
+growth
+crisis
+change
 Breaking News
 Stock rises today
 Nvidia beats Microsoft
+
+These are too generic — they could match any news story.
+Always ask: would this keyword work ONLY for this story, or any story?
 
 7. overlay should be 2-5 words.
 
