@@ -24,7 +24,7 @@ def generate_voice(script, output_path=None):
 
     # Build narration if script is JSON
     if isinstance(script, dict):
-        text = build_voice_text(script)
+        text = build_narration(script)
     else:
         text = str(script)
 
