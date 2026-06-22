@@ -1,5 +1,6 @@
 import os
-import requests
+import base64
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -13,12 +14,15 @@ client = OpenAI(
 # Model config — switch here when ready for production
 # ---------------------------------------------------
 
-DALL_E_MODEL = "dall-e-2"       # testing  (~$0.002/image)
-# DALL_E_MODEL = "dall-e-3"     # production (~$0.04/image)
+DALL_E_MODEL = "gpt-image-1-mini"   # testing  (~$0.005/image)
+# DALL_E_MODEL = "gpt-image-1"      # production (~$0.011-0.167/image)
 
-IMAGE_SIZE = "512x512"          # dall-e-2 testing (cheapest)
-# IMAGE_SIZE = "1024x1024"      # dall-e-2 better quality
-# IMAGE_SIZE = "1024x1792"      # dall-e-3 vertical (best for reels)
+IMAGE_SIZE = "1024x1024"            # square — works for all models
+# IMAGE_SIZE = "1024x1536"          # portrait — better for reels (gpt-image-1 only)
+
+IMAGE_QUALITY = "low"               # low = cheapest (~$0.005)
+# IMAGE_QUALITY = "medium"          # medium = balanced
+# IMAGE_QUALITY = "high"            # high = best quality, most expensive
 
 
 # ---------------------------------------------------
@@ -27,8 +31,7 @@ IMAGE_SIZE = "512x512"          # dall-e-2 testing (cheapest)
 
 def build_image_prompt(scene):
     """
-    Builds a DALL-E prompt from a scene dict.
-
+    Builds a GPT Image prompt from a scene dict.
     Expects scene keys: text, keyword, mood
     """
 
@@ -36,7 +39,6 @@ def build_image_prompt(scene):
     keyword = scene.get("keyword", "")
     mood = scene.get("mood", "neutral")
 
-    # Map mood to visual style guidance
     mood_styles = {
         "dramatic":  "dramatic lighting, high contrast, cinematic",
         "positive":  "bright, optimistic, warm lighting",
@@ -64,10 +66,10 @@ def build_image_prompt(scene):
 
 def generate_image_for_scene(scene, output_dir, index):
     """
-    Generates a DALL-E image for a single scene.
+    Generates a GPT Image for a single scene.
 
     Returns:
-        dict with keys: keyword, path, media_type="image", source="dalle"
+        dict with keys: keyword, path, media_type, source
         or None if generation fails
     """
 
@@ -76,7 +78,7 @@ def generate_image_for_scene(scene, output_dir, index):
     keyword = scene.get("keyword", f"scene_{index}")
     prompt = build_image_prompt(scene)
 
-    print(f"  Generating DALL-E image for: {keyword}")
+    print(f"  Generating image for: {keyword}")
     print(f"  Prompt: {prompt[:80]}...")
 
     try:
@@ -84,23 +86,18 @@ def generate_image_for_scene(scene, output_dir, index):
             model=DALL_E_MODEL,
             prompt=prompt,
             n=1,
-            size=IMAGE_SIZE
+            size=IMAGE_SIZE,
+            quality=IMAGE_QUALITY
         )
 
-        image_url = response.data[0].url
+        # GPT Image models return base64, not a URL
+        image_data = base64.b64decode(response.data[0].b64_json)
 
-        # Download the generated image
-        r = requests.get(image_url, timeout=30)
-
-        if r.status_code != 200:
-            print(f"  Failed to download generated image: {r.status_code}")
-            return None
-
-        filename = f"{index}_{keyword.replace(' ', '_')}_dalle.png"
+        filename = f"{index}_{keyword.replace(' ', '_')}.png"
         filepath = os.path.join(output_dir, filename)
 
         with open(filepath, "wb") as f:
-            f.write(r.content)
+            f.write(image_data)
 
         print(f"  ✓ Saved: {filename}")
 
@@ -113,7 +110,7 @@ def generate_image_for_scene(scene, output_dir, index):
         }
 
     except Exception as e:
-        print(f"  DALL-E error for scene {index}: {e}")
+        print(f"  Image generation error for scene {index}: {e}")
         return None
 
 
@@ -123,7 +120,7 @@ def generate_image_for_scene(scene, output_dir, index):
 
 def generate_images_for_scenes(scenes, output_dir="output/clips"):
     """
-    Generates one DALL-E image per scene.
+    Generates one GPT Image per scene.
 
     Expects:
         scenes = list of scene dicts from script JSON
@@ -132,8 +129,12 @@ def generate_images_for_scenes(scenes, output_dir="output/clips"):
         list of asset dicts (or None where generation failed)
     """
 
-    print(f"\nGenerating {len(scenes)} DALL-E images ({DALL_E_MODEL})...")
-    print(f"Estimated cost: ~${len(scenes) * 0.002:.3f} USD\n")
+    cost_per_image = 0.005
+    estimated_cost = len(scenes) * cost_per_image
+    estimated_inr = estimated_cost * 84  # approximate USD to INR
+
+    print(f"\nGenerating {len(scenes)} images ({DALL_E_MODEL}, {IMAGE_QUALITY} quality)")
+    print(f"Estimated cost: ~${estimated_cost:.3f} USD (~₹{estimated_inr:.1f})\n")
 
     assets = []
 
@@ -141,10 +142,9 @@ def generate_images_for_scenes(scenes, output_dir="output/clips"):
         asset = generate_image_for_scene(scene, output_dir, index)
         assets.append(asset)
 
-    # Summary
     success = sum(1 for a in assets if a is not None)
     failed = sum(1 for a in assets if a is None)
 
-    print(f"\nDALL-E generation complete: {success} succeeded, {failed} failed")
+    print(f"\nImage generation: {success} succeeded, {failed} failed")
 
     return assets
