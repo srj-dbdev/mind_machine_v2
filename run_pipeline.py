@@ -5,15 +5,13 @@ import traceback
 from collectors.news_collector import fetch_news
 
 from generators.script_generator import generate_script
-from generators.voice_generator import generate_voice
+from generators.voice_generator import generate_voice_per_scene
 
-from downloaders.pexels_downloader import download_videos
+from downloaders.pexels_downloader import download_assets
 
 from renderers.video_renderer import create_video
 
 from database.db import get_connection
-
-from utils.audio_utils import build_narration
 
 
 def run_pipeline():
@@ -40,84 +38,110 @@ def run_pipeline():
             print("=" * 70)
 
             # --------------------------------------------------
-            # Generate structured video plan
+            # Generate structured video plan (8-10 scenes)
             # --------------------------------------------------
 
             script = generate_script(topic)
 
             print("\nVideo plan generated.")
 
-            # --------------------------------------------------
-            # Build narration
-            # --------------------------------------------------
+            scenes = script.get("scenes", [])
 
-            narration = build_narration(script)
-
-            print("\nNarration:\n")
-            print(narration)
+            print(f"Scenes: {len(scenes)}")
 
             # --------------------------------------------------
-            # Generate Voice
+            # Generate one audio file per scene
             # --------------------------------------------------
 
-            audio_path = generate_voice(narration)
+            print("\nGenerating per-scene audio...")
 
-            print("\nVoice generated:")
-            print(audio_path)
+            scene_audios = generate_voice_per_scene(script)
 
-            # --------------------------------------------------
-            # Extract keywords directly from scenes
-            # --------------------------------------------------
-
-            keywords = []
-
-            for scene in script.get("scenes", []):
-
-                keyword = scene.get("keyword")
-
-                if keyword:
-                    keywords.append(keyword)
-
-            print("\nVisual Keywords")
-
-            for keyword in keywords:
-                print(f" • {keyword}")
+            print(f"\nScene audios generated: {len(scene_audios)}")
 
             # --------------------------------------------------
-            # Download Pexels clips
+            # Download one asset per scene
+            # (Pexels video first, Pixabay image fallback)
             # --------------------------------------------------
 
-            clips = download_videos(keywords)
+            print("\nDownloading assets...")
 
-            if not clips:
+            assets = download_assets(scenes)
 
-                print("\nNo Pexels clips found.")
-                print("Using fallback background.")
+            # --------------------------------------------------
+            # Align assets with scene_audios
+            # scenes list may be longer than scene_audios
+            # (hook and cta are in scene_audios but not in scenes)
+            # so we build a combined list in order
+            # --------------------------------------------------
 
-            else:
+            # scene_audios includes hook, scenes, cta
+            # assets are indexed to scenes only
+            # We need to pair them carefully:
+            #   hook audio   → no asset (use first asset)
+            #   scene audios → matching asset by position
+            #   cta audio    → no asset (use last asset)
 
-                print(f"\nDownloaded {len(clips)} clips")
+            paired_audios = []
+            paired_assets = []
 
-                for clip in clips:
-                    print(
-                        f" • {clip['keyword']} -> "
-                        f"{os.path.basename(clip['path'])}"
+            scene_index = 0
+
+            for sa in scene_audios:
+
+                label = sa.get("label", "")
+
+                if label == "hook":
+                    # Use first available asset for hook
+                    first_asset = next(
+                        (a for a in assets if a is not None), None
                     )
+                    paired_audios.append(sa)
+                    paired_assets.append(first_asset)
+
+                elif label == "cta":
+                    # Use last available asset for cta
+                    last_asset = next(
+                        (a for a in reversed(assets) if a is not None), None
+                    )
+                    paired_audios.append(sa)
+                    paired_assets.append(last_asset)
+
+                else:
+                    # Scene — match by position
+                    asset = assets[scene_index] if scene_index < len(assets) else None
+                    paired_audios.append(sa)
+                    paired_assets.append(asset)
+                    scene_index += 1
+
+            print(f"\nPaired {len(paired_audios)} audio segments with assets")
+
+            for i, (sa, asset) in enumerate(
+                zip(paired_audios, paired_assets)
+            ):
+                asset_type = asset["media_type"] if asset else "missing"
+                asset_kw = asset["keyword"] if asset else "none"
+                print(
+                    f"  {i+1}. [{asset_type}] {asset_kw} "
+                    f"← {sa['text'][:40]}"
+                )
 
             # --------------------------------------------------
-            # Render Reel
+            # Render reel with per-scene sync
             # --------------------------------------------------
+
+            print("\nRendering reel...")
 
             video_path = create_video(
-                audio_path=audio_path,
-                clips=clips
+                scene_audios=paired_audios,
+                scenes=paired_assets
             )
 
-            print("\nReel Created")
+            print("\nReel created:")
             print(video_path)
 
             # --------------------------------------------------
-            # Save JSON script
+            # Save script to DB
             # --------------------------------------------------
 
             conn = get_connection()
@@ -125,8 +149,7 @@ def run_pipeline():
 
             cur.execute(
                 """
-                INSERT INTO scripts
-                (topic_id, script_text)
+                INSERT INTO scripts (topic_id, script_text)
                 VALUES (%s, %s)
                 """,
                 (
@@ -136,7 +159,6 @@ def run_pipeline():
             )
 
             conn.commit()
-
             cur.close()
             conn.close()
 
