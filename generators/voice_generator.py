@@ -1,18 +1,27 @@
-import asyncio
-import edge_tts
 import os
 import time
+
+from gtts import gTTS
 
 from utils.audio_utils import build_narration, clean_text
 
 
-async def _generate_voice_async(text, output_path):
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice="en-US-GuyNeural"
-    )
-    await communicate.save(output_path)
+# ---------------------------------------------------
+# Core TTS function
+# ---------------------------------------------------
 
+def _generate_voice_gtts(text, output_path, lang="en"):
+    """
+    Generates speech from text using gTTS (Google Translate TTS).
+    Free, no API key required.
+    """
+    tts = gTTS(text=text, lang=lang, slow=False)
+    tts.save(output_path)
+
+
+# ---------------------------------------------------
+# Single narration MP3 (full script)
+# ---------------------------------------------------
 
 def generate_voice(script, output_path=None):
     """
@@ -31,7 +40,7 @@ def generate_voice(script, output_path=None):
         timestamp = int(time.time())
         output_path = f"output/voice_{timestamp}.mp3"
 
-    asyncio.run(_generate_voice_async(text, output_path))
+    _generate_voice_gtts(text, output_path)
 
     print("\n========== NARRATION ==========")
     print(text)
@@ -41,17 +50,22 @@ def generate_voice(script, output_path=None):
     return output_path
 
 
+# ---------------------------------------------------
+# Per-scene audio (one MP3 per scene)
+# ---------------------------------------------------
+
 def generate_voice_per_scene(script, output_dir="output/audio"):
     """
-    Generates one MP3 per scene so clips can be synced
-    to narration line changes exactly.
+    Generates one MP3 per scene so clips sync exactly
+    to narration line changes.
 
     Returns:
         [
             {
                 "order": 1,
                 "text": "...",
-                "audio_path": "output/audio/scene_1.mp3"
+                "audio_path": "output/audio/scene_1.mp3",
+                "label": "scene_1"
             },
             ...
         ]
@@ -59,7 +73,7 @@ def generate_voice_per_scene(script, output_dir="output/audio"):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Build hook + scenes + cta as ordered list
+    # Build ordered list: hook → scenes → cta
     items = []
 
     hook = clean_text(script.get("hook", ""))
@@ -91,6 +105,7 @@ def generate_voice_per_scene(script, output_dir="output/audio"):
     scene_audios = []
 
     for item in items:
+
         audio_path = os.path.join(
             output_dir,
             f"{item['label']}.mp3"
@@ -98,15 +113,20 @@ def generate_voice_per_scene(script, output_dir="output/audio"):
 
         print(f"  Generating audio: {item['label']} → {item['text'][:50]}")
 
-        asyncio.run(
-            _generate_voice_async(item["text"], audio_path)
-        )
+        try:
+            _generate_voice_gtts(item["text"], audio_path)
 
-        scene_audios.append({
-            "order": item["order"],
-            "text": item["text"],
-            "audio_path": audio_path
-        })
+            scene_audios.append({
+                "order": item["order"],
+                "text": item["text"],
+                "audio_path": audio_path,
+                "label": item["label"]
+            })
+
+        except Exception as e:
+            print(f"  Voice failed for {item['label']}: {e}")
+            # Skip this scene, don't crash the pipeline
+            continue
 
     print(f"\nGenerated {len(scene_audios)} scene audio files")
 
