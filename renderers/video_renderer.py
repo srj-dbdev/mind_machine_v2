@@ -477,14 +477,18 @@ def create_video(
         print("\nConcatenating segments...")
 
         subprocess.run([
-            "ffmpeg", "-y",
-            "-fflags", "+genpts",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c", "copy",
-            merged
-        ], check=True)
+                "ffmpeg", "-y",
+                "-fflags", "+genpts",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_file,
+                "-c:v", "copy",      # keep video as-is
+                "-c:a", "aac",       # re-encode audio to fix stream mismatches
+                "-b:a", "128k",
+                "-ar", "44100",      # force consistent sample rate
+                "-ac", "2",          # force stereo
+                merged
+            ], check=True)
 
         # --------------------------------------------------
         # Fallback mode — add single audio track
