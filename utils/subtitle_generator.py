@@ -12,8 +12,8 @@ client = OpenAI(
 # Whisper model config
 # ---------------------------------------------------
 
-WHISPER_MODEL = "gpt-4o-mini-transcribe"  # cheapest (~$0.003/min)
-# WHISPER_MODEL = "whisper-1"             # standard (~$0.006/min)
+# WHISPER_MODEL = "gpt-4o-mini-transcribe"  # cheapest (~$0.003/min)
+WHISPER_MODEL = "whisper-1"             # standard (~$0.006/min)
 
 
 # ---------------------------------------------------
