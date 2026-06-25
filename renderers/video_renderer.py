@@ -82,69 +82,123 @@ def normalize_asset(input_file, output_file, duration, media_type="video"):
 
 
 # ---------------------------------------------------
-# Burn handwritten text overlay onto first scene
+# Escape text for ffmpeg drawtext
 # ---------------------------------------------------
 
-def burn_text_overlay(input_file, output_file, text):
+def escape_ffmpeg_text(text):
     """
-    Burns narration text onto the first scene video
-    using LobsterTwo-BoldItalic handwritten font.
+    Escapes special characters for ffmpeg drawtext filter.
+    """
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace("'",  "\u2019")
+        .replace(":",  "\\:")
+        .replace("%",  "\\%")
+        .replace("[",  "\\[")
+        .replace("]",  "\\]")
+    )
 
-    Text is centered horizontally, placed in the lower
-    third of the frame with a soft dark background box.
+
+# ---------------------------------------------------
+# Burn subtitle chunks onto a video segment
+# ---------------------------------------------------
+
+def burn_subtitles(input_file, output_file, chunks, is_first_scene=False):
+    """
+    Burns subtitle chunks onto a video segment using ffmpeg drawtext.
+
+    Each chunk appears at its start time and disappears at its end time.
+    On the first scene, the full narration text also appears as a
+    larger handwritten overlay at the top.
+
+    Args:
+        input_file:     normalized video segment
+        output_file:    output path
+        chunks:         list of {"text", "start", "end"} dicts
+        is_first_scene: if True, adds larger headline text at top
     """
 
     if not os.path.exists(FONT_PATH):
-        print(f"  Font not found at {FONT_PATH} — skipping overlay")
+        print(f"  Font not found — skipping subtitles")
         shutil.copy(input_file, output_file)
         return
 
-    # Escape special characters for ffmpeg drawtext
-    safe_text = (
-        text
-        .replace("\\", "\\\\")
-        .replace("'",  "\u2019")   # replace straight apostrophe with curly
-        .replace(":",  "\\:")
-        .replace("%",  "\\%")
-    )
+    if not chunks:
+        print(f"  No subtitle chunks — skipping")
+        shutil.copy(input_file, output_file)
+        return
 
-    # Normalize font path for ffmpeg on Windows (forward slashes)
-    # font_path_ffmpeg = FONT_PATH.replace("\\", "/")
-    font_path_ffmpeg = FONT_PATH
+    # Build drawtext filter chain for each chunk
+    filter_parts = []
 
-    drawtext_filter = (
-        f"drawtext="
-        f"fontfile={font_path_ffmpeg}:"
-        f"text='{safe_text}':"
-        f"fontcolor=white:"
-        f"fontsize=54:"
-        f"box=1:"
-        f"boxcolor=black@0.45:"
-        f"boxborderw=20:"
-        f"x=(w-text_w)/2:"
-        f"y=(h*0.70):"
-        f"line_spacing=14:"
-        f"borderw=2:"
-        f"bordercolor=black@0.5:"
-        f"expansion=none"
-    )
+    # First scene headline text (LobsterTwo, larger, top area)
+    if is_first_scene and chunks:
+        full_text = escape_ffmpeg_text(
+            " ".join(c["text"] for c in chunks)
+        )
+        total_start = chunks[0]["start"]
+        total_end = chunks[-1]["end"]
+
+        filter_parts.append(
+            f"drawtext="
+            f"fontfile={FONT_PATH}:"
+            f"text='{full_text}':"
+            f"fontcolor=white:"
+            f"fontsize=58:"
+            f"box=1:"
+            f"boxcolor=black@0.45:"
+            f"boxborderw=20:"
+            f"x=(w-text_w)/2:"
+            f"y=(h*0.12):"
+            f"line_spacing=12:"
+            f"borderw=2:"
+            f"bordercolor=black@0.5:"
+            f"expansion=none:"
+            f"enable='between(t,{total_start},{total_end})'"
+        )
+
+    # Subtitle chunks at bottom (all scenes)
+    for chunk in chunks:
+        safe_text = escape_ffmpeg_text(chunk["text"])
+        start = chunk["start"]
+        end = chunk["end"]
+
+        filter_parts.append(
+            f"drawtext="
+            f"fontfile={FONT_PATH}:"
+            f"text='{safe_text}':"
+            f"fontcolor=white:"
+            f"fontsize=52:"
+            f"box=1:"
+            f"boxcolor=black@0.55:"
+            f"boxborderw=16:"
+            f"x=(w-text_w)/2:"
+            f"y=(h*0.82):"
+            f"borderw=2:"
+            f"bordercolor=black@0.5:"
+            f"expansion=none:"
+            f"enable='between(t,{start},{end})'"
+        )
+
+    vf_filter = ",".join(filter_parts)
 
     cmd = [
         "ffmpeg", "-y",
         "-i", input_file,
-        "-vf", drawtext_filter,
-        "-codec:a", "copy",
+        "-vf", vf_filter,
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
+        "-codec:a", "copy",
         output_file
     ]
 
     try:
         subprocess.run(cmd, check=True)
-        print("  ✓ Text overlay applied")
+        print(f"  ✓ Subtitles applied ({len(chunks)} chunks)")
     except subprocess.CalledProcessError as e:
-        print(f"  Text overlay failed: {e} — using image without overlay")
+        print(f"  Subtitle burn failed: {e} — using segment without subtitles")
         shutil.copy(input_file, output_file)
 
 
@@ -174,21 +228,34 @@ def combine_segment(video_file, audio_file, output_file):
 # Main renderer — scene-synced
 # ---------------------------------------------------
 
-def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
+def create_video(
+    audio_path=None,
+    clips=None,
+    scene_audios=None,
+    scenes=None,
+    subtitles=None
+):
     """
     Creates the final reel with clips synced to scene narration.
 
     Preferred mode — scene_audios + scenes (per-scene sync):
         scene_audios = [{"order":1, "text":"...", "audio_path":"..."}]
-        scenes       = [{"keyword":"...", "path":"...", "media_type":"video|image"}]
+        scenes       = [{"keyword":"...", "path":"...", "media_type":"..."}]
+        subtitles    = [{"label":"...", "chunks":[...]}] (optional)
 
     Fallback mode — audio_path + clips (original behaviour):
         audio_path = single MP3
-        clips      = [{"path":"...", "media_type":"video|image"}]
+        clips      = [{"path":"...", "media_type":"..."}]
     """
 
     os.makedirs("output", exist_ok=True)
     temp_dir = tempfile.mkdtemp()
+
+    # Build subtitle lookup by label for quick access
+    subtitle_map = {}
+    if subtitles:
+        for s in subtitles:
+            subtitle_map[s["label"]] = s.get("chunks", [])
 
     try:
 
@@ -213,6 +280,7 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
                 audio_file = scene_audio["audio_path"]
                 duration = get_audio_duration(audio_file)
                 media_type = asset.get("media_type", "video")
+                label = scene_audio.get("label", "")
 
                 print(
                     f"  Scene {i+1}: {media_type} "
@@ -228,16 +296,19 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
                     media_type
                 )
 
-                # First scene — burn narration text overlay
-                if i == 0:
-                    print("  Applying handwritten text overlay to opening scene...")
-                    overlaid = os.path.join(temp_dir, f"overlaid_{i}.mp4")
-                    burn_text_overlay(
+                # Burn subtitles if available
+                chunks = subtitle_map.get(label, [])
+                is_first = (i == 0)
+
+                if chunks or is_first:
+                    subtitled = os.path.join(temp_dir, f"subtitled_{i}.mp4")
+                    burn_subtitles(
                         normalized,
-                        overlaid,
-                        scene_audio["text"]
+                        subtitled,
+                        chunks,
+                        is_first_scene=is_first
                     )
-                    normalized = overlaid
+                    normalized = subtitled
 
                 # Combine with scene audio
                 segment = os.path.join(temp_dir, f"segment_{i}.mp4")
@@ -330,7 +401,6 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
             ], check=True)
 
         else:
-            # Scene-synced: audio already embedded per segment
             shutil.copy(merged, output_video)
 
         print(f"\nReel created: {output_video}")
