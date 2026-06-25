@@ -179,18 +179,24 @@ def create_title_card(output_file, hook_text, temp_dir):
     )
 
     cmd = [
-        "ffmpeg", "-y",
-        # Generate black background
-        "-f", "lavfi",
-        "-i", f"color=c=black:s=1080x1920:r=30:d={TITLE_CARD_DURATION}",
-        "-vf", vf_filter,
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-an",
-        output_file
-    ]
+    "ffmpeg", "-y",
+    # Black video background
+    "-f", "lavfi",
+    "-i", f"color=c=black:s=1080x1920:r=30:d={TITLE_CARD_DURATION}",
+    # Silent audio track
+    "-f", "lavfi",
+    "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-vf", vf_filter,
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "23",
+    "-pix_fmt", "yuv420p",
+    # Encode silent audio as AAC
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-t", str(TITLE_CARD_DURATION),
+    output_file
+]
 
     try:
         subprocess.run(cmd, check=True)
