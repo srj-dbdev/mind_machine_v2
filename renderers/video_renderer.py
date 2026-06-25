@@ -9,7 +9,7 @@ import time
 # Font config
 # ---------------------------------------------------
 
-FONT_PATH = os.path.abspath("assets/fonts/LobsterTwo-BoldItalic.ttf")
+FONT_PATH = "assets/fonts/LobsterTwo-BoldItalic.ttf"
 
 
 # ---------------------------------------------------
@@ -109,7 +109,8 @@ def burn_text_overlay(input_file, output_file, text):
     )
 
     # Normalize font path for ffmpeg on Windows (forward slashes)
-    font_path_ffmpeg = FONT_PATH.replace("\\", "/")
+    # font_path_ffmpeg = FONT_PATH.replace("\\", "/")
+    font_path_ffmpeg = FONT_PATH
 
     drawtext_filter = (
         f"drawtext="
