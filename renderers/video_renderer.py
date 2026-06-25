@@ -113,7 +113,7 @@ def burn_text_overlay(input_file, output_file, text):
 
     drawtext_filter = (
         f"drawtext="
-        f"fontfile='{font_path_ffmpeg}':"
+        f"fontfile={font_path_ffmpeg}:"
         f"text='{safe_text}':"
         f"fontcolor=white:"
         f"fontsize=54:"
