@@ -12,6 +12,8 @@ from downloaders.visuals_downloader import download_assets
 
 from renderers.video_renderer import create_video
 
+from utils.subtitle_generator import generate_subtitles
+
 from database.db import get_connection
 
 
@@ -54,9 +56,7 @@ def run_pipeline(max_reels=1):
             # --------------------------------------------------
 
             script = generate_script(topic)
-
             scenes = script.get("scenes", [])
-
             print(f"\nVideo plan generated — {len(scenes)} scenes")
 
             # --------------------------------------------------
@@ -64,19 +64,26 @@ def run_pipeline(max_reels=1):
             # --------------------------------------------------
 
             print("\nGenerating per-scene audio...")
-
             scene_audios = generate_voice_per_scene(script)
-
             print(f"Scene audios: {len(scene_audios)}")
 
             # --------------------------------------------------
+            # Generate Whisper subtitles from scene audio
+            # --------------------------------------------------
+
+            print("\nGenerating subtitles via Whisper...")
+            subtitles = generate_subtitles(scene_audios)
+
+            # --------------------------------------------------
             # Generate DALL-E images for scenes
-            # Falls back to Pexels/Pixabay if DALL-E fails
+            # Falls back to Pexels/Pixabay if generation fails
             # --------------------------------------------------
 
             print("\nGenerating scene images...")
-
-            dalle_assets = generate_images_for_scenes(scenes, headline=title)
+            dalle_assets = generate_images_for_scenes(
+                scenes,
+                headline=title
+            )
 
             # For any scene where DALL-E failed, try visuals downloader
             assets = []
@@ -104,7 +111,6 @@ def run_pipeline(max_reels=1):
 
             paired_audios = []
             paired_assets = []
-
             scene_index = 0
 
             for sa in scene_audios:
@@ -150,14 +156,15 @@ def run_pipeline(max_reels=1):
                 )
 
             # --------------------------------------------------
-            # Render reel with per-scene sync
+            # Render reel with per-scene sync + subtitles
             # --------------------------------------------------
 
             print("\nRendering reel...")
 
             video_path = create_video(
                 scene_audios=paired_audios,
-                scenes=paired_assets
+                scenes=paired_assets,
+                subtitles=subtitles
             )
 
             print(f"\nReel created: {video_path}")
