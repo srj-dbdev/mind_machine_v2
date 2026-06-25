@@ -11,6 +11,10 @@ import time
 
 FONT_PATH = "assets/fonts/LobsterTwo-BoldItalic.ttf"
 
+# Title card config
+TITLE_CARD_DURATION = 3       # seconds the title card stays on screen
+TITLE_CARD_FADE_DURATION = 0.5 # seconds for fade in/out
+
 
 # ---------------------------------------------------
 # Get audio duration
@@ -101,22 +105,140 @@ def escape_ffmpeg_text(text):
 
 
 # ---------------------------------------------------
+# Word-wrap text to fixed character width
+# ---------------------------------------------------
+
+def wrap_text(text, max_chars=28):
+    """
+    Wraps text into lines of max_chars width.
+    Returns a string with \n separating lines,
+    formatted for ffmpeg drawtext.
+    """
+    words = text.split()
+    lines = []
+    current = []
+    current_len = 0
+
+    for word in words:
+        # +1 for the space
+        if current_len + len(word) + (1 if current else 0) <= max_chars:
+            current.append(word)
+            current_len += len(word) + (1 if len(current) > 1 else 0)
+        else:
+            if current:
+                lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+
+    if current:
+        lines.append(" ".join(current))
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------
+# Generate title card with black background + yellow text
+# ---------------------------------------------------
+
+def create_title_card(output_file, hook_text, temp_dir):
+    """
+    Creates a title card segment:
+    - Black background
+    - Yellow LobsterTwo text, word-wrapped, centered
+    - Fades in from black, holds, fades out to black
+    - Duration: TITLE_CARD_DURATION seconds
+    """
+
+    if not os.path.exists(FONT_PATH):
+        print("  Font not found — skipping title card")
+        return None
+
+    safe_text = escape_ffmpeg_text(wrap_text(hook_text, max_chars=24))
+
+    fade_in_end = TITLE_CARD_FADE_DURATION
+    fade_out_start = TITLE_CARD_DURATION - TITLE_CARD_FADE_DURATION
+
+    # Generate black background with yellow text + fade in/out
+    vf_filter = (
+        # Draw yellow wrapped text centered on black background
+        f"drawtext="
+        f"fontfile={FONT_PATH}:"
+        f"text='{safe_text}':"
+        f"fontcolor=yellow:"
+        f"fontsize=62:"
+        f"x=(w-text_w)/2:"
+        f"y=(h-text_h)/2:"
+        f"line_spacing=20:"
+        f"borderw=3:"
+        f"bordercolor=black@0.6:"
+        f"expansion=none,"
+        # Fade in from black
+        f"fade=t=in:st=0:d={TITLE_CARD_FADE_DURATION},"
+        # Fade out to black
+        f"fade=t=out:st={fade_out_start}:d={TITLE_CARD_FADE_DURATION}"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        # Generate black background
+        "-f", "lavfi",
+        "-i", f"color=c=black:s=1080x1920:r=30:d={TITLE_CARD_DURATION}",
+        "-vf", vf_filter,
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-an",
+        output_file
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"  ✓ Title card created ({TITLE_CARD_DURATION}s)")
+        return output_file
+    except subprocess.CalledProcessError as e:
+        print(f"  Title card creation failed: {e}")
+        return None
+
+
+# ---------------------------------------------------
+# Add fade-in effect to first scene
+# ---------------------------------------------------
+
+def add_fade_in(input_file, output_file):
+    """
+    Adds a fade-in from black to the first scene
+    so it blends smoothly after the title card fade-out.
+    """
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_file,
+        "-vf", f"fade=t=in:st=0:d={TITLE_CARD_FADE_DURATION}",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-codec:a", "copy",
+        output_file
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+        return output_file
+    except subprocess.CalledProcessError as e:
+        print(f"  Fade-in failed: {e}")
+        return input_file
+
+
+# ---------------------------------------------------
 # Burn subtitle chunks onto a video segment
 # ---------------------------------------------------
 
-def burn_subtitles(input_file, output_file, chunks, is_first_scene=False):
+def burn_subtitles(input_file, output_file, chunks):
     """
     Burns subtitle chunks onto a video segment using ffmpeg drawtext.
-
     Each chunk appears at its start time and disappears at its end time.
-    On the first scene, the full narration text also appears as a
-    larger handwritten overlay at the top.
-
-    Args:
-        input_file:     normalized video segment
-        output_file:    output path
-        chunks:         list of {"text", "start", "end"} dicts
-        is_first_scene: if True, adds larger headline text at top
+    Text is word-wrapped and displayed at the bottom of the frame.
     """
 
     if not os.path.exists(FONT_PATH):
@@ -129,52 +251,28 @@ def burn_subtitles(input_file, output_file, chunks, is_first_scene=False):
         shutil.copy(input_file, output_file)
         return
 
-    # Build drawtext filter chain for each chunk
     filter_parts = []
 
-    # First scene headline text (LobsterTwo, larger, top area)
-    if is_first_scene and chunks:
-        full_text = escape_ffmpeg_text(
-            " ".join(c["text"] for c in chunks)
-        )
-        total_start = chunks[0]["start"]
-        total_end = chunks[-1]["end"]
-
-        filter_parts.append(
-            f"drawtext="
-            f"fontfile={FONT_PATH}:"
-            f"text='{full_text}':"
-            f"fontcolor=white:"
-            f"fontsize=58:"
-            f"box=1:"
-            f"boxcolor=black@0.45:"
-            f"boxborderw=20:"
-            f"x=(w-text_w)/2:"
-            f"y=(h*0.12):"
-            f"line_spacing=12:"
-            f"borderw=2:"
-            f"bordercolor=black@0.5:"
-            f"expansion=none:"
-            f"enable='between(t,{total_start},{total_end})'"
-        )
-
-    # Subtitle chunks at bottom (all scenes)
     for chunk in chunks:
-        safe_text = escape_ffmpeg_text(chunk["text"])
+        # Wrap each chunk to fit screen width
+        wrapped = escape_ffmpeg_text(
+            wrap_text(chunk["text"], max_chars=28)
+        )
         start = chunk["start"]
         end = chunk["end"]
 
         filter_parts.append(
             f"drawtext="
             f"fontfile={FONT_PATH}:"
-            f"text='{safe_text}':"
+            f"text='{wrapped}':"
             f"fontcolor=white:"
             f"fontsize=52:"
             f"box=1:"
             f"boxcolor=black@0.55:"
             f"boxborderw=16:"
             f"x=(w-text_w)/2:"
-            f"y=(h*0.82):"
+            f"y=(h*0.80):"
+            f"line_spacing=12:"
             f"borderw=2:"
             f"bordercolor=black@0.5:"
             f"expansion=none:"
@@ -233,31 +331,43 @@ def create_video(
     clips=None,
     scene_audios=None,
     scenes=None,
-    subtitles=None
+    subtitles=None,
+    hook_text=None
 ):
     """
-    Creates the final reel with clips synced to scene narration.
+    Creates the final reel with title card, scene-synced clips,
+    and Whisper subtitles.
 
-    Preferred mode — scene_audios + scenes (per-scene sync):
-        scene_audios = [{"order":1, "text":"...", "audio_path":"..."}]
-        scenes       = [{"keyword":"...", "path":"...", "media_type":"..."}]
-        subtitles    = [{"label":"...", "chunks":[...]}] (optional)
-
-    Fallback mode — audio_path + clips (original behaviour):
-        audio_path = single MP3
-        clips      = [{"path":"...", "media_type":"..."}]
+    Args:
+        scene_audios: [{"order":1, "text":"...", "audio_path":"..."}]
+        scenes:       [{"keyword":"...", "path":"...", "media_type":"..."}]
+        subtitles:    [{"label":"...", "chunks":[...]}]
+        hook_text:    string — displayed on title card (hook from script)
     """
 
     os.makedirs("output", exist_ok=True)
     temp_dir = tempfile.mkdtemp()
 
-    # Build subtitle lookup by label for quick access
+    # Build subtitle lookup by label
     subtitle_map = {}
     if subtitles:
         for s in subtitles:
             subtitle_map[s["label"]] = s.get("chunks", [])
 
     try:
+
+        segments = []
+
+        # --------------------------------------------------
+        # Title card — prepended before scene 1
+        # --------------------------------------------------
+
+        if hook_text:
+            print("\nCreating title card...")
+            title_card = os.path.join(temp_dir, "title_card.mp4")
+            result = create_title_card(title_card, hook_text, temp_dir)
+            if result:
+                segments.append(title_card)
 
         # --------------------------------------------------
         # Mode 1: per-scene sync (preferred)
@@ -266,8 +376,6 @@ def create_video(
         if scene_audios and scenes:
 
             print("\nRendering with per-scene sync...")
-
-            segments = []
 
             for i, (scene_audio, asset) in enumerate(
                 zip(scene_audios, scenes)
@@ -296,19 +404,21 @@ def create_video(
                     media_type
                 )
 
-                # Burn subtitles if available
+                # Burn subtitles onto scene
                 chunks = subtitle_map.get(label, [])
-                is_first = (i == 0)
 
-                if chunks or is_first:
-                    subtitled = os.path.join(temp_dir, f"subtitled_{i}.mp4")
-                    burn_subtitles(
-                        normalized,
-                        subtitled,
-                        chunks,
-                        is_first_scene=is_first
+                if chunks:
+                    subtitled = os.path.join(
+                        temp_dir, f"subtitled_{i}.mp4"
                     )
+                    burn_subtitles(normalized, subtitled, chunks)
                     normalized = subtitled
+
+                # First scene — add fade in from black
+                if i == 0 and hook_text:
+                    faded = os.path.join(temp_dir, f"faded_{i}.mp4")
+                    add_fade_in(normalized, faded)
+                    normalized = faded
 
                 # Combine with scene audio
                 segment = os.path.join(temp_dir, f"segment_{i}.mp4")
@@ -331,13 +441,6 @@ def create_video(
 
             total_duration = get_audio_duration(audio_path)
             clip_duration = total_duration / len(clips)
-
-            print(
-                f"  Total: {total_duration:.2f}s, "
-                f"each clip: {clip_duration:.2f}s"
-            )
-
-            segments = []
 
             for i, clip in enumerate(clips):
                 media_type = clip.get("media_type", "video")
