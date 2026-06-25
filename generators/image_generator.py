@@ -26,16 +26,19 @@ IMAGE_QUALITY = "low"               # low = cheapest (~$0.005)
 
 
 # ---------------------------------------------------
-# Build a clean image prompt from scene data
+# Build image prompt from scene data
 # ---------------------------------------------------
 
-def build_image_prompt(scene):
+def build_image_prompt(scene, headline=None):
     """
     Builds a GPT Image prompt from a scene dict.
+
+    If headline is provided (first scene only), uses the full
+    news headline as the primary subject for a stronger opening image.
+
     Expects scene keys: text, keyword, mood
     """
 
-    text = scene.get("text", "")
     keyword = scene.get("keyword", "")
     mood = scene.get("mood", "neutral")
 
@@ -50,8 +53,21 @@ def build_image_prompt(scene):
 
     style = mood_styles.get(mood, "clean, professional, photorealistic")
 
+    if headline:
+        # First scene — headline drives the image for maximum impact
+        subject = (
+            f"{headline}. "
+            f"Key visual: {keyword}."
+        )
+    else:
+        # All other scenes — keyword + narration text
+        subject = (
+            f"{keyword}. "
+            f"{scene.get('text', '')}."
+        )
+
     prompt = (
-        f"{keyword}. {text}. "
+        f"{subject} "
         f"News photography style. {style}. "
         f"No text, no watermarks, no logos. "
         f"Photorealistic."
@@ -64,9 +80,15 @@ def build_image_prompt(scene):
 # Generate one image for a scene
 # ---------------------------------------------------
 
-def generate_image_for_scene(scene, output_dir, index):
+def generate_image_for_scene(scene, output_dir, index, headline=None):
     """
     Generates a GPT Image for a single scene.
+
+    Args:
+        scene:    scene dict from script JSON
+        output_dir: folder to save image
+        index:    scene number (1-based)
+        headline: full news headline — only passed for scene 1
 
     Returns:
         dict with keys: keyword, path, media_type, source
@@ -76,9 +98,13 @@ def generate_image_for_scene(scene, output_dir, index):
     os.makedirs(output_dir, exist_ok=True)
 
     keyword = scene.get("keyword", f"scene_{index}")
-    prompt = build_image_prompt(scene)
+    prompt = build_image_prompt(scene, headline=headline)
 
-    print(f"  Generating image for: {keyword}")
+    if headline:
+        print(f"  Generating OPENING image from headline: {headline[:60]}...")
+    else:
+        print(f"  Generating image for: {keyword}")
+
     print(f"  Prompt: {prompt[:80]}...")
 
     try:
@@ -118,12 +144,17 @@ def generate_image_for_scene(scene, output_dir, index):
 # Generate images for all scenes
 # ---------------------------------------------------
 
-def generate_images_for_scenes(scenes, output_dir="output/clips"):
+def generate_images_for_scenes(scenes, output_dir="output/clips", headline=None):
     """
     Generates one GPT Image per scene.
 
-    Expects:
-        scenes = list of scene dicts from script JSON
+    The first scene uses the full news headline for a stronger
+    opening image. All other scenes use their keyword + narration.
+
+    Args:
+        scenes:     list of scene dicts from script JSON
+        output_dir: folder to save images
+        headline:   full news article title — used for scene 1 only
 
     Returns:
         list of asset dicts (or None where generation failed)
@@ -131,7 +162,7 @@ def generate_images_for_scenes(scenes, output_dir="output/clips"):
 
     cost_per_image = 0.005
     estimated_cost = len(scenes) * cost_per_image
-    estimated_inr = estimated_cost * 84  # approximate USD to INR
+    estimated_inr = estimated_cost * 84
 
     print(f"\nGenerating {len(scenes)} images ({DALL_E_MODEL}, {IMAGE_QUALITY} quality)")
     print(f"Estimated cost: ~${estimated_cost:.3f} USD (~₹{estimated_inr:.1f})\n")
@@ -139,7 +170,17 @@ def generate_images_for_scenes(scenes, output_dir="output/clips"):
     assets = []
 
     for index, scene in enumerate(scenes, start=1):
-        asset = generate_image_for_scene(scene, output_dir, index)
+
+        # Pass headline only for the first scene
+        scene_headline = headline if index == 1 else None
+
+        asset = generate_image_for_scene(
+            scene,
+            output_dir,
+            index,
+            headline=scene_headline
+        )
+
         assets.append(asset)
 
     success = sum(1 for a in assets if a is not None)

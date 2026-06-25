@@ -76,7 +76,7 @@ def run_pipeline(max_reels=1):
 
             print("\nGenerating scene images...")
 
-            dalle_assets = generate_images_for_scenes(scenes)
+            dalle_assets = generate_images_for_scenes(scenes, headline=title)
 
             # For any scene where DALL-E failed, try visuals downloader
             assets = []
