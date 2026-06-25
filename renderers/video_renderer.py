@@ -6,6 +6,13 @@ import time
 
 
 # ---------------------------------------------------
+# Font config
+# ---------------------------------------------------
+
+FONT_PATH = os.path.abspath("assets/fonts/LobsterTwo-BoldItalic.ttf")
+
+
+# ---------------------------------------------------
 # Get audio duration
 # ---------------------------------------------------
 
@@ -28,7 +35,8 @@ def get_audio_duration(audio_path):
 def normalize_asset(input_file, output_file, duration, media_type="video"):
     """
     Normalizes a video clip or static image to 1080x1920 vertical format.
-    For images, holds the frame for `duration` seconds.
+    For images, holds the frame for exactly `duration` seconds.
+    For videos, loops and trims to exactly `duration` seconds.
     """
 
     if media_type == "image":
@@ -51,7 +59,6 @@ def normalize_asset(input_file, output_file, duration, media_type="video"):
             output_file
         ]
     else:
-        # Video: loop if shorter than needed, then trim to duration
         cmd = [
             "ffmpeg", "-y",
             "-stream_loop", "-1",
@@ -72,6 +79,72 @@ def normalize_asset(input_file, output_file, duration, media_type="video"):
         ]
 
     subprocess.run(cmd, check=True)
+
+
+# ---------------------------------------------------
+# Burn handwritten text overlay onto first scene
+# ---------------------------------------------------
+
+def burn_text_overlay(input_file, output_file, text):
+    """
+    Burns narration text onto the first scene video
+    using LobsterTwo-BoldItalic handwritten font.
+
+    Text is centered horizontally, placed in the lower
+    third of the frame with a soft dark background box.
+    """
+
+    if not os.path.exists(FONT_PATH):
+        print(f"  Font not found at {FONT_PATH} — skipping overlay")
+        shutil.copy(input_file, output_file)
+        return
+
+    # Escape special characters for ffmpeg drawtext
+    safe_text = (
+        text
+        .replace("\\", "\\\\")
+        .replace("'",  "\u2019")   # replace straight apostrophe with curly
+        .replace(":",  "\\:")
+        .replace("%",  "\\%")
+    )
+
+    # Normalize font path for ffmpeg on Windows (forward slashes)
+    font_path_ffmpeg = FONT_PATH.replace("\\", "/")
+
+    drawtext_filter = (
+        f"drawtext="
+        f"fontfile='{font_path_ffmpeg}':"
+        f"text='{safe_text}':"
+        f"fontcolor=white:"
+        f"fontsize=54:"
+        f"box=1:"
+        f"boxcolor=black@0.45:"
+        f"boxborderw=20:"
+        f"x=(w-text_w)/2:"
+        f"y=(h*0.70):"
+        f"line_spacing=14:"
+        f"borderw=2:"
+        f"bordercolor=black@0.5:"
+        f"expansion=none"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_file,
+        "-vf", drawtext_filter,
+        "-codec:a", "copy",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        output_file
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+        print("  ✓ Text overlay applied")
+    except subprocess.CalledProcessError as e:
+        print(f"  Text overlay failed: {e} — using image without overlay")
+        shutil.copy(input_file, output_file)
 
 
 # ---------------------------------------------------
@@ -106,11 +179,11 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
 
     Preferred mode — scene_audios + scenes (per-scene sync):
         scene_audios = [{"order":1, "text":"...", "audio_path":"..."}]
-        scenes = [{"keyword":"...", "path":"...", "media_type":"video|image"}]
+        scenes       = [{"keyword":"...", "path":"...", "media_type":"video|image"}]
 
     Fallback mode — audio_path + clips (original behaviour):
         audio_path = single MP3
-        clips = [{"path":"...", "media_type":"video|image"}]
+        clips      = [{"path":"...", "media_type":"video|image"}]
     """
 
     os.makedirs("output", exist_ok=True)
@@ -145,10 +218,8 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
                     f"({duration:.2f}s) — {asset['keyword']}"
                 )
 
-                # Normalize asset to duration
-                normalized = os.path.join(
-                    temp_dir, f"norm_{i}.mp4"
-                )
+                # Normalize asset to exact audio duration
+                normalized = os.path.join(temp_dir, f"norm_{i}.mp4")
                 normalize_asset(
                     asset["path"],
                     normalized,
@@ -156,10 +227,19 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
                     media_type
                 )
 
+                # First scene — burn narration text overlay
+                if i == 0:
+                    print("  Applying handwritten text overlay to opening scene...")
+                    overlaid = os.path.join(temp_dir, f"overlaid_{i}.mp4")
+                    burn_text_overlay(
+                        normalized,
+                        overlaid,
+                        scene_audio["text"]
+                    )
+                    normalized = overlaid
+
                 # Combine with scene audio
-                segment = os.path.join(
-                    temp_dir, f"segment_{i}.mp4"
-                )
+                segment = os.path.join(temp_dir, f"segment_{i}.mp4")
                 combine_segment(normalized, audio_file, segment)
                 segments.append(segment)
 
@@ -172,12 +252,18 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
             print("\nRendering with equal clip split (fallback)...")
 
             if not clips:
-                clips = [{"path": "assets/background.mp4", "media_type": "video"}]
+                clips = [{
+                    "path": "assets/background.mp4",
+                    "media_type": "video"
+                }]
 
             total_duration = get_audio_duration(audio_path)
             clip_duration = total_duration / len(clips)
 
-            print(f"  Total: {total_duration:.2f}s, each clip: {clip_duration:.2f}s")
+            print(
+                f"  Total: {total_duration:.2f}s, "
+                f"each clip: {clip_duration:.2f}s"
+            )
 
             segments = []
 
@@ -211,6 +297,7 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
 
         subprocess.run([
             "ffmpeg", "-y",
+            "-fflags", "+genpts",
             "-f", "concat",
             "-safe", "0",
             "-i", concat_file,
@@ -219,7 +306,7 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
         ], check=True)
 
         # --------------------------------------------------
-        # In fallback mode, add the single audio track
+        # Fallback mode — add single audio track
         # --------------------------------------------------
 
         timestamp = int(time.time())
@@ -242,7 +329,7 @@ def create_video(audio_path=None, clips=None, scene_audios=None, scenes=None):
             ], check=True)
 
         else:
-            # Scene-synced mode: audio already embedded per segment
+            # Scene-synced: audio already embedded per segment
             shutil.copy(merged, output_video)
 
         print(f"\nReel created: {output_video}")
