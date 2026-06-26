@@ -164,8 +164,7 @@ def run_pipeline(max_reels=1):
             video_path = create_video(
                 scene_audios=paired_audios,
                 scenes=paired_assets,
-                subtitles=subtitles,
-                hook_text=script.get("hook", "")
+                subtitles=subtitles
             )
 
             print(f"\nReel created: {video_path}")
