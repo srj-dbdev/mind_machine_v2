@@ -192,22 +192,24 @@ def create_card(
         log.debug("  Using black background (no image available)")
 
     cmd = [
-        "ffmpeg", "-y",
-        *video_input,
-        "-f", "lavfi",
-        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-        "-vf", vf_filter,
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-t", str(TITLE_CARD_DURATION),
-        output_file
-    ]
+    "ffmpeg", "-y",
+    *video_input,
+    "-f", "lavfi",
+    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-vf", vf_filter,
+    "-c:v", "libx264",
+    "-preset", "medium",
+    "-crf", "23",
+    "-pix_fmt", "yuv420p",
+    "-r", "30",
+    "-video_track_timescale", "90000",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-ar", "44100",
+    "-ac", "2",
+    "-t", str(TITLE_CARD_DURATION),
+    output_file
+]
 
     log.debug(f"  ffmpeg cmd: {' '.join(cmd)}")
 
@@ -329,7 +331,12 @@ def combine_segment(video_file, audio_file, output_file):
         "-i", audio_file,
         "-map", "0:v",
         "-map", "1:a",
-        "-c:v", "copy",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        "-video_track_timescale", "90000",
         "-c:a", "aac",
         "-b:a", "128k",
         "-ar", "44100",
