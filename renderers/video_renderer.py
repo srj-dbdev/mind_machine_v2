@@ -13,6 +13,31 @@ FONT_PATH = "assets/fonts/LobsterTwo-BoldItalic.ttf"
 
 TITLE_CARD_DURATION  = 3
 TITLE_CARD_FADE      = 0.5
+TRANSITION_DURATION  = 0.4   # seconds — xfade overlap between scenes
+
+
+# ---------------------------------------------------
+# Style → transition type mapping
+# ---------------------------------------------------
+
+STYLE_TRANSITION_MAP = {
+    "breaking_news": "zoomin",
+    "technology":    "zoomin",
+    "sports":        "zoomin",
+    "finance":       "dissolve",
+    "business":      "dissolve",
+    "politics":      "dissolve",
+    "world":         "dissolve",
+    "science":       "dissolve",
+}
+
+
+def get_transition(style):
+    """
+    Returns the xfade transition type for a given script style.
+    Defaults to dissolve for unknown styles.
+    """
+    return STYLE_TRANSITION_MAP.get(style, "dissolve")
 
 
 # ---------------------------------------------------
@@ -26,6 +51,22 @@ def get_audio_duration(audio_path):
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         audio_path
+    ]
+    result = subprocess.check_output(cmd)
+    return float(result.decode().strip())
+
+
+# ---------------------------------------------------
+# Get video duration
+# ---------------------------------------------------
+
+def get_video_duration(video_path):
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path
     ]
     result = subprocess.check_output(cmd)
     return float(result.decode().strip())
@@ -118,7 +159,7 @@ def wrap_text(text, max_chars=24):
     if current:
         lines.append(" ".join(current))
 
-    return "\n".join(lines)
+    return "\\n".join(lines)
 
 
 # ---------------------------------------------------
@@ -150,12 +191,9 @@ def create_card(
 
     log.debug(f"  bg_path: {bg_path}")
     log.debug(f"  bg_path exists: {os.path.exists(bg_path) if bg_path else False}")
-    log.debug(f"  overlay_opacity: {overlay_opacity}")
 
     safe_text = escape_ffmpeg_text(wrap_text(text, max_chars=20))
     fade_out_start = TITLE_CARD_DURATION - TITLE_CARD_FADE
-
-    log.debug(f"  safe_text: {safe_text}")
 
     vf_filter = (
         f"scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -179,8 +217,6 @@ def create_card(
         f"fade=t=out:st={fade_out_start}:d={TITLE_CARD_FADE}"
     )
 
-    log.debug(f"  vf_filter: {vf_filter}")
-
     if bg_path and os.path.exists(bg_path):
         video_input = ["-loop", "1", "-i", bg_path]
         log.debug("  Using background image")
@@ -189,27 +225,27 @@ def create_card(
             "-f", "lavfi",
             "-i", "color=c=black:s=1080x1920:r=30"
         ]
-        log.debug("  Using black background (no image available)")
+        log.debug("  Using black background")
 
     cmd = [
-    "ffmpeg", "-y",
-    *video_input,
-    "-f", "lavfi",
-    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-    "-vf", vf_filter,
-    "-c:v", "libx264",
-    "-preset", "medium",
-    "-crf", "23",
-    "-pix_fmt", "yuv420p",
-    "-r", "30",
-    "-video_track_timescale", "90000",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-ar", "44100",
-    "-ac", "2",
-    "-t", str(TITLE_CARD_DURATION),
-    output_file
-]
+        "ffmpeg", "-y",
+        *video_input,
+        "-f", "lavfi",
+        "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-vf", vf_filter,
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        "-video_track_timescale", "90000",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-ac", "2",
+        "-t", str(TITLE_CARD_DURATION),
+        output_file
+    ]
 
     log.debug(f"  ffmpeg cmd: {' '.join(cmd)}")
 
@@ -220,14 +256,13 @@ def create_card(
             capture_output=True,
             text=True
         )
-        log.debug(f"  ffmpeg stderr: {result.stderr[-500:] if result.stderr else 'none'}")
+        log.debug(f"  ffmpeg stderr: {result.stderr[-300:] if result.stderr else 'none'}")
         mood = card_background.get("visual_mood", "default") if card_background else "default"
         log.info(f"  ✓ {card_name} created ({mood} background, {TITLE_CARD_DURATION}s)")
         return output_file
 
     except subprocess.CalledProcessError as e:
-        log.error(f"  {card_name} ffmpeg failed with return code {e.returncode}")
-        log.error(f"  ffmpeg stdout: {e.stdout}")
+        log.error(f"  {card_name} ffmpeg failed: {e.returncode}")
         log.error(f"  ffmpeg stderr: {e.stderr}")
         return None
 
@@ -352,7 +387,160 @@ def combine_segment(video_file, audio_file, output_file):
 
 
 # ---------------------------------------------------
-# Main renderer — scene-synced
+# Apply xfade transitions between segments
+# ---------------------------------------------------
+
+def apply_xfade_transitions(segments, output_file, transition_type="dissolve"):
+    """
+    Applies xfade transitions between all segments using ffmpeg
+    filter_complex. Builds the filter graph dynamically based on
+    segment count and cumulative durations.
+
+    Subtitles and audio are already embedded in each segment —
+    transitions only affect the visual layer between segments.
+
+    Args:
+        segments:        list of segment file paths
+        output_file:     final output path
+        transition_type: xfade transition type (dissolve, zoomin, etc.)
+    """
+
+    log = get_logger()
+
+    if len(segments) < 2:
+        log.info("Only one segment — skipping xfade, copying directly")
+        shutil.copy(segments[0], output_file)
+        return
+
+    log.info(f"Applying xfade transitions: {transition_type}")
+
+    # Build input args
+    inputs = []
+    for seg in segments:
+        inputs.extend(["-i", seg])
+
+    # Get durations for offset calculation
+    durations = [get_video_duration(seg) for seg in segments]
+
+    log.debug(f"  Segment durations: {[f'{d:.2f}s' for d in durations]}")
+
+    # Build xfade filter chain
+    # Each transition offsets at: sum(prev durations) - transition_duration
+    # Video and audio are handled separately in the filter graph
+
+    n = len(segments)
+    filter_parts = []
+    cumulative = 0.0
+
+    # Chain video xfades
+    for i in range(n - 1):
+        offset = cumulative + durations[i] - TRANSITION_DURATION
+        cumulative += durations[i] - TRANSITION_DURATION
+
+        if i == 0:
+            v_in_a = f"[0:v]"
+            v_in_b = f"[1:v]"
+        else:
+            v_in_a = f"[vout{i}]"
+            v_in_b = f"[{i+1}:v]"
+
+        v_out = f"[vout{i+1}]" if i < n - 2 else "[vout]"
+
+        filter_parts.append(
+            f"{v_in_a}{v_in_b}xfade="
+            f"transition={transition_type}:"
+            f"duration={TRANSITION_DURATION}:"
+            f"offset={offset:.4f}"
+            f"{v_out}"
+        )
+
+    # Chain audio crossfades (acrossfade)
+    a_cumulative = 0.0
+    for i in range(n - 1):
+        a_offset = durations[i] - TRANSITION_DURATION
+        a_cumulative += a_offset
+
+        if i == 0:
+            a_in_a = f"[0:a]"
+            a_in_b = f"[1:a]"
+        else:
+            a_in_a = f"[aout{i}]"
+            a_in_b = f"[{i+1}:a]"
+
+        a_out = f"[aout{i+1}]" if i < n - 2 else "[aout]"
+
+        filter_parts.append(
+            f"{a_in_a}{a_in_b}acrossfade="
+            f"d={TRANSITION_DURATION}:"
+            f"c1=tri:c2=tri"
+            f"{a_out}"
+        )
+
+    filter_complex = ";".join(filter_parts)
+
+    log.debug(f"  filter_complex: {filter_complex[:200]}...")
+
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "[aout]",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-r", "30",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-ac", "2",
+        output_file
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        log.info(f"  ✓ xfade transitions applied ({n-1} transitions)")
+        log.debug(f"  ffmpeg stderr: {result.stderr[-300:] if result.stderr else 'none'}")
+
+    except subprocess.CalledProcessError as e:
+        log.error(f"  xfade failed: {e.stderr[-500:]}")
+        log.warning("  Falling back to simple concat without transitions")
+
+        # Fallback — simple concat if xfade fails
+        concat_file = output_file + "_concat.txt"
+        with open(concat_file, "w") as f:
+            for seg in segments:
+                f.write(f"file '{os.path.abspath(seg)}'\n")
+
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-fflags", "+genpts",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ar", "44100",
+            "-ac", "2",
+            output_file
+        ], check=True)
+
+        os.remove(concat_file)
+
+
+# ---------------------------------------------------
+# Main renderer — scene-synced with xfade transitions
 # ---------------------------------------------------
 
 def create_video(
@@ -363,14 +551,34 @@ def create_video(
     subtitles=None,
     hook_text=None,
     cta_text=None,
-    card_background=None
+    card_background=None,
+    style="business"
 ):
+    """
+    Creates the final reel:
+    [Title Card] → [Scene 1..N with subtitles] → [End Card]
+    With xfade transitions between all segments.
+
+    Args:
+        scene_audios:    per-scene audio dicts
+        scenes:          per-scene asset dicts
+        subtitles:       Whisper subtitle chunks per scene
+        hook_text:       text for title card
+        cta_text:        text for end card
+        card_background: dict {path, visual_mood, overlay_opacity}
+        style:           script style for transition selection
+    """
+
     log = get_logger()
 
     log.debug(f"create_video called:")
     log.debug(f"  hook_text: {hook_text}")
     log.debug(f"  cta_text: {cta_text}")
+    log.debug(f"  style: {style}")
     log.debug(f"  card_background: {card_background}")
+
+    transition_type = get_transition(style)
+    log.info(f"Transition type: {transition_type} (style: {style})")
 
     os.makedirs("output", exist_ok=True)
     temp_dir = tempfile.mkdtemp()
@@ -393,19 +601,16 @@ def create_video(
             log.info("Creating title card...")
             title_card = os.path.join(temp_dir, "title_card.mp4")
             result = create_card(
-                title_card,
-                hook_text,
-                card_background,
-                temp_dir,
-                is_end_card=False
+                title_card, hook_text, card_background,
+                temp_dir, is_end_card=False
             )
             if result:
                 segments.append(title_card)
-                log.debug(f"  Title card added to segments: {title_card}")
+                log.debug(f"  Title card added: {title_card}")
             else:
-                log.error("  Title card returned None — not added to segments")
+                log.error("  Title card returned None")
         else:
-            log.warning("hook_text is empty — skipping title card")
+            log.warning("hook_text empty — skipping title card")
 
         # --------------------------------------------------
         # Scene segments
@@ -433,23 +638,33 @@ def create_video(
                     f"({duration:.2f}s) — {asset['keyword']}"
                 )
 
+                # Normalize
                 normalized = os.path.join(temp_dir, f"norm_{i}.mp4")
-                normalize_asset(asset["path"], normalized, duration, media_type)
+                normalize_asset(
+                    asset["path"], normalized, duration, media_type
+                )
 
+                # Subtitles
                 chunks = subtitle_map.get(label, [])
                 if chunks:
                     subtitled = os.path.join(temp_dir, f"subtitled_{i}.mp4")
                     burn_subtitles(normalized, subtitled, chunks)
                     normalized = subtitled
 
+                # Fade in on first scene
                 if i == 0 and hook_text:
                     faded = os.path.join(temp_dir, f"faded_{i}.mp4")
                     add_fade_in(normalized, faded)
                     normalized = faded
 
+                # Combine with audio
                 segment = os.path.join(temp_dir, f"segment_{i}.mp4")
                 combine_segment(normalized, audio_file, segment)
                 segments.append(segment)
+
+        # --------------------------------------------------
+        # Fallback mode
+        # --------------------------------------------------
 
         else:
 
@@ -464,7 +679,9 @@ def create_video(
             for i, clip in enumerate(clips):
                 media_type = clip.get("media_type", "video")
                 normalized = os.path.join(temp_dir, f"norm_{i}.mp4")
-                normalize_asset(clip["path"], normalized, clip_duration, media_type)
+                normalize_asset(
+                    clip["path"], normalized, clip_duration, media_type
+                )
                 segments.append(normalized)
 
         # --------------------------------------------------
@@ -475,76 +692,40 @@ def create_video(
             log.info("Creating end card...")
             end_card = os.path.join(temp_dir, "end_card.mp4")
             result = create_card(
-                end_card,
-                cta_text,
-                card_background,
-                temp_dir,
-                is_end_card=True
+                end_card, cta_text, card_background,
+                temp_dir, is_end_card=True
             )
             if result:
                 segments.append(end_card)
-                log.debug(f"  End card added to segments: {end_card}")
+                log.debug(f"  End card added: {end_card}")
             else:
-                log.error("  End card returned None — not added to segments")
+                log.error("  End card returned None")
         else:
-            log.warning("cta_text is empty — skipping end card")
+            log.warning("cta_text empty — skipping end card")
 
         # --------------------------------------------------
-        # Concatenate all segments
+        # Apply xfade transitions between all segments
         # --------------------------------------------------
 
-        log.info(f"Total segments to concat: {len(segments)}")
+        log.info(f"Total segments: {len(segments)}")
         for seg in segments:
             log.debug(f"  segment: {seg}")
 
         if not segments:
             raise ValueError("No segments to render.")
 
-        concat_file = os.path.join(temp_dir, "segments.txt")
-
-        with open(concat_file, "w", encoding="utf8") as f:
-            for seg in segments:
-                f.write(f"file '{os.path.abspath(seg)}'\n")
-
-        merged = os.path.join(temp_dir, "merged.mp4")
-
-        log.info("Concatenating segments...")
-
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-fflags", "+genpts",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c:v", "libx264",    # re-encode video
-            "-preset", "fast",    # fast preset to keep it quick
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-r", "30",           # force consistent 30fps
-            "-c:a", "aac",        # re-encode audio
-            "-b:a", "128k",
-            "-ar", "44100",       # force consistent sample rate
-            "-ac", "2",           # force stereo
-            merged
-        ], check=True)
-
         timestamp = int(time.time())
         output_video = f"output/reel_{timestamp}.mp4"
 
-        if audio_path and not scene_audios:
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", merged,
-                "-i", audio_path,
-                "-map", "0:v",
-                "-map", "1:a",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-shortest",
-                output_video
-            ], check=True)
-        else:
-            shutil.copy(merged, output_video)
+        merged = os.path.join(temp_dir, "merged.mp4")
+
+        apply_xfade_transitions(
+            segments,
+            merged,
+            transition_type=transition_type
+        )
+
+        shutil.copy(merged, output_video)
 
         log.info(f"Reel created: {output_video}")
         return output_video
