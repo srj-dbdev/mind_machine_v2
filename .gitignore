@@ -7,7 +7,8 @@ __pycache__/
 *.pyo
 .venv/
 *.egg-info/
-logs/
+logs/*
+!logs/.gitkeep
 
 # Generated media files
 *.mp4
