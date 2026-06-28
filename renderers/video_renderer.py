@@ -509,7 +509,15 @@ def create_video(
             "-f", "concat",
             "-safe", "0",
             "-i", concat_file,
-            "-c", "copy",
+            "-c:v", "libx264",    # re-encode video
+            "-preset", "fast",    # fast preset to keep it quick
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",           # force consistent 30fps
+            "-c:a", "aac",        # re-encode audio
+            "-b:a", "128k",
+            "-ar", "44100",       # force consistent sample rate
+            "-ac", "2",           # force stereo
             merged
         ], check=True)
 
