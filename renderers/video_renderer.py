@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-
+from utils.logger import get_logger
 
 # ---------------------------------------------------
 # Font config
@@ -132,40 +132,38 @@ def create_card(
     temp_dir,
     is_end_card=False
 ):
-    """
-    Creates a title or end card segment:
-    - Thematic background image (dark/vibrant/neutral)
-    - Semi-transparent dark overlay for readability
-    - Yellow LobsterTwo text, word-wrapped, centered
-    - Fade in from black, hold, fade out to black
-    - Silent AAC audio track for concat compatibility
-    """
+    log = get_logger()
+    card_name = "end card" if is_end_card else "title card"
+
+    log.debug(f"create_card called — {card_name}")
+    log.debug(f"  text: {text}")
+    log.debug(f"  FONT_PATH: {FONT_PATH}")
+    log.debug(f"  FONT_PATH exists: {os.path.exists(FONT_PATH)}")
+    log.debug(f"  card_background: {card_background}")
 
     if not os.path.exists(FONT_PATH):
-        print("  Font not found — skipping card")
+        log.error(f"Font not found at {FONT_PATH} — skipping {card_name}")
         return None
 
     bg_path = card_background.get("path") if card_background else None
     overlay_opacity = card_background.get("overlay_opacity", 0.45) if card_background else 0.6
 
+    log.debug(f"  bg_path: {bg_path}")
+    log.debug(f"  bg_path exists: {os.path.exists(bg_path) if bg_path else False}")
+    log.debug(f"  overlay_opacity: {overlay_opacity}")
+
     safe_text = escape_ffmpeg_text(wrap_text(text, max_chars=20))
     fade_out_start = TITLE_CARD_DURATION - TITLE_CARD_FADE
 
-    # Build video filter chain
-    # 1. Scale background to 1080x1920
-    # 2. Add dark overlay for readability
-    # 3. Draw yellow text centered
-    # 4. Fade in / fade out
+    log.debug(f"  safe_text: {safe_text}")
 
     vf_filter = (
         f"scale=1080:1920:force_original_aspect_ratio=increase,"
         f"crop=1080:1920,"
-        # Dark overlay
         f"drawbox="
         f"x=0:y=0:w=iw:h=ih:"
         f"color=black@{overlay_opacity}:"
         f"t=fill,"
-        # Yellow text — double size (font 120)
         f"drawtext="
         f"fontfile={FONT_PATH}:"
         f"text='{safe_text}':"
@@ -177,20 +175,21 @@ def create_card(
         f"borderw=4:"
         f"bordercolor=black@0.7:"
         f"expansion=none,"
-        # Fade in
         f"fade=t=in:st=0:d={TITLE_CARD_FADE},"
-        # Fade out
         f"fade=t=out:st={fade_out_start}:d={TITLE_CARD_FADE}"
     )
 
-    # Use background image if available, else black
+    log.debug(f"  vf_filter: {vf_filter}")
+
     if bg_path and os.path.exists(bg_path):
         video_input = ["-loop", "1", "-i", bg_path]
+        log.debug("  Using background image")
     else:
         video_input = [
             "-f", "lavfi",
-            "-i", f"color=c=black:s=1080x1920:r=30"
+            "-i", "color=c=black:s=1080x1920:r=30"
         ]
+        log.debug("  Using black background (no image available)")
 
     cmd = [
         "ffmpeg", "-y",
@@ -210,15 +209,24 @@ def create_card(
         output_file
     ]
 
-    card_name = "end card" if is_end_card else "title card"
+    log.debug(f"  ffmpeg cmd: {' '.join(cmd)}")
 
     try:
-        subprocess.run(cmd, check=True)
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        log.debug(f"  ffmpeg stderr: {result.stderr[-500:] if result.stderr else 'none'}")
         mood = card_background.get("visual_mood", "default") if card_background else "default"
-        print(f"  ✓ {card_name} created ({mood} background, {TITLE_CARD_DURATION}s)")
+        log.info(f"  ✓ {card_name} created ({mood} background, {TITLE_CARD_DURATION}s)")
         return output_file
+
     except subprocess.CalledProcessError as e:
-        print(f"  {card_name} creation failed: {e}")
+        log.error(f"  {card_name} ffmpeg failed with return code {e.returncode}")
+        log.error(f"  ffmpeg stdout: {e.stdout}")
+        log.error(f"  ffmpeg stderr: {e.stderr}")
         return None
 
 
@@ -227,6 +235,7 @@ def create_card(
 # ---------------------------------------------------
 
 def add_fade_in(input_file, output_file):
+    log = get_logger()
     cmd = [
         "ffmpeg", "-y",
         "-i", input_file,
@@ -238,9 +247,10 @@ def add_fade_in(input_file, output_file):
         output_file
     ]
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         return output_file
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        log.error(f"  Fade-in failed: {e.stderr}")
         return input_file
 
 
@@ -249,12 +259,15 @@ def add_fade_in(input_file, output_file):
 # ---------------------------------------------------
 
 def burn_subtitles(input_file, output_file, chunks):
+    log = get_logger()
 
     if not os.path.exists(FONT_PATH):
+        log.warning("Font not found — skipping subtitles")
         shutil.copy(input_file, output_file)
         return
 
     if not chunks:
+        log.debug("No subtitle chunks — skipping")
         shutil.copy(input_file, output_file)
         return
 
@@ -297,19 +310,19 @@ def burn_subtitles(input_file, output_file, chunks):
     ]
 
     try:
-        subprocess.run(cmd, check=True)
-        print(f"  ✓ Subtitles applied ({len(chunks)} chunks)")
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        log.info(f"  ✓ Subtitles applied ({len(chunks)} chunks)")
     except subprocess.CalledProcessError as e:
-        print(f"  Subtitle burn failed: {e}")
+        log.error(f"  Subtitle burn failed: {e.stderr}")
         shutil.copy(input_file, output_file)
 
 
 # ---------------------------------------------------
 # Combine a single video segment with its audio
-# Normalizes audio to 44100Hz stereo AAC
 # ---------------------------------------------------
 
 def combine_segment(video_file, audio_file, output_file):
+    log = get_logger()
     cmd = [
         "ffmpeg", "-y",
         "-i", video_file,
@@ -324,7 +337,11 @@ def combine_segment(video_file, audio_file, output_file):
         "-shortest",
         output_file
     ]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        log.error(f"  combine_segment failed: {e.stderr}")
+        raise
 
 
 # ---------------------------------------------------
@@ -341,22 +358,16 @@ def create_video(
     cta_text=None,
     card_background=None
 ):
-    """
-    Creates the final reel:
-    [Title Card] → [Scene 1..N with subtitles] → [End Card]
+    log = get_logger()
 
-    Args:
-        scene_audios:    per-scene audio dicts
-        scenes:          per-scene asset dicts
-        subtitles:       Whisper subtitle chunks per scene
-        hook_text:       text for title card
-        cta_text:        text for end card
-        card_background: dict from generate_card_background()
-                         {path, visual_mood, overlay_opacity}
-    """
+    log.debug(f"create_video called:")
+    log.debug(f"  hook_text: {hook_text}")
+    log.debug(f"  cta_text: {cta_text}")
+    log.debug(f"  card_background: {card_background}")
 
     os.makedirs("output", exist_ok=True)
     temp_dir = tempfile.mkdtemp()
+    log.debug(f"  temp_dir: {temp_dir}")
 
     subtitle_map = {}
     if subtitles:
@@ -372,7 +383,7 @@ def create_video(
         # --------------------------------------------------
 
         if hook_text:
-            print("\nCreating title card...")
+            log.info("Creating title card...")
             title_card = os.path.join(temp_dir, "title_card.mp4")
             result = create_card(
                 title_card,
@@ -383,6 +394,11 @@ def create_video(
             )
             if result:
                 segments.append(title_card)
+                log.debug(f"  Title card added to segments: {title_card}")
+            else:
+                log.error("  Title card returned None — not added to segments")
+        else:
+            log.warning("hook_text is empty — skipping title card")
 
         # --------------------------------------------------
         # Scene segments
@@ -390,14 +406,14 @@ def create_video(
 
         if scene_audios and scenes:
 
-            print("\nRendering with per-scene sync...")
+            log.info("Rendering with per-scene sync...")
 
             for i, (scene_audio, asset) in enumerate(
                 zip(scene_audios, scenes)
             ):
 
                 if asset is None:
-                    print(f"  Scene {i+1}: no asset, skipping")
+                    log.warning(f"  Scene {i+1}: no asset, skipping")
                     continue
 
                 audio_file = scene_audio["audio_path"]
@@ -405,40 +421,32 @@ def create_video(
                 media_type = asset.get("media_type", "video")
                 label = scene_audio.get("label", "")
 
-                print(
+                log.info(
                     f"  Scene {i+1}: {media_type} "
                     f"({duration:.2f}s) — {asset['keyword']}"
                 )
 
-                # Normalize
                 normalized = os.path.join(temp_dir, f"norm_{i}.mp4")
                 normalize_asset(asset["path"], normalized, duration, media_type)
 
-                # Subtitles
                 chunks = subtitle_map.get(label, [])
                 if chunks:
                     subtitled = os.path.join(temp_dir, f"subtitled_{i}.mp4")
                     burn_subtitles(normalized, subtitled, chunks)
                     normalized = subtitled
 
-                # Fade in on first scene
                 if i == 0 and hook_text:
                     faded = os.path.join(temp_dir, f"faded_{i}.mp4")
                     add_fade_in(normalized, faded)
                     normalized = faded
 
-                # Combine with audio
                 segment = os.path.join(temp_dir, f"segment_{i}.mp4")
                 combine_segment(normalized, audio_file, segment)
                 segments.append(segment)
 
-        # --------------------------------------------------
-        # Fallback mode
-        # --------------------------------------------------
-
         else:
 
-            print("\nRendering with equal clip split (fallback)...")
+            log.info("Rendering with equal clip split (fallback)...")
 
             if not clips:
                 clips = [{"path": "assets/background.mp4", "media_type": "video"}]
@@ -457,7 +465,7 @@ def create_video(
         # --------------------------------------------------
 
         if cta_text:
-            print("\nCreating end card...")
+            log.info("Creating end card...")
             end_card = os.path.join(temp_dir, "end_card.mp4")
             result = create_card(
                 end_card,
@@ -468,10 +476,19 @@ def create_video(
             )
             if result:
                 segments.append(end_card)
+                log.debug(f"  End card added to segments: {end_card}")
+            else:
+                log.error("  End card returned None — not added to segments")
+        else:
+            log.warning("cta_text is empty — skipping end card")
 
         # --------------------------------------------------
         # Concatenate all segments
         # --------------------------------------------------
+
+        log.info(f"Total segments to concat: {len(segments)}")
+        for seg in segments:
+            log.debug(f"  segment: {seg}")
 
         if not segments:
             raise ValueError("No segments to render.")
@@ -484,7 +501,7 @@ def create_video(
 
         merged = os.path.join(temp_dir, "merged.mp4")
 
-        print("\nConcatenating segments...")
+        log.info("Concatenating segments...")
 
         subprocess.run([
             "ffmpeg", "-y",
@@ -495,10 +512,6 @@ def create_video(
             "-c", "copy",
             merged
         ], check=True)
-
-        # --------------------------------------------------
-        # Fallback mode — add single audio track
-        # --------------------------------------------------
 
         timestamp = int(time.time())
         output_video = f"output/reel_{timestamp}.mp4"
@@ -518,7 +531,7 @@ def create_video(
         else:
             shutil.copy(merged, output_video)
 
-        print(f"\nReel created: {output_video}")
+        log.info(f"Reel created: {output_video}")
         return output_video
 
     finally:
