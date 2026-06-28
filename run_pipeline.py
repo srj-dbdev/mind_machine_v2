@@ -6,13 +6,18 @@ from collectors.news_collector import fetch_news
 
 from generators.script_generator import generate_script
 from generators.voice_generator import generate_voice_per_scene
-from generators.image_generator import generate_images_for_scenes
+from generators.image_generator import (
+    generate_images_for_scenes,
+    generate_card_background
+)
 
 from downloaders.visuals_downloader import download_assets
 
 from renderers.video_renderer import create_video
 
 from utils.subtitle_generator import generate_subtitles
+
+from utils.logger import setup_logger
 
 from database.db import get_connection
 
@@ -27,15 +32,17 @@ def run_pipeline(max_reels=1):
                          Set to 5 for production runs.
     """
 
-    print("=" * 70)
-    print("PIPELINE STARTED")
-    print(f"Reels to generate: {max_reels}")
-    print("=" * 70)
+    log = setup_logger()
+
+    log.info("=" * 70)
+    log.info("PIPELINE STARTED")
+    log.info(f"Reels to generate: {max_reels}")
+    log.info("=" * 70)
 
     topics = fetch_news()
 
     if not topics:
-        print("No news found.")
+        log.warning("No news found.")
         return
 
     total = min(max_reels, len(topics))
@@ -46,10 +53,10 @@ def run_pipeline(max_reels=1):
 
         try:
 
-            print("\n")
-            print("=" * 70)
-            print(f"({index}/{total}) {title}")
-            print("=" * 70)
+            log.info("")
+            log.info("=" * 70)
+            log.info(f"({index}/{total}) {title}")
+            log.info("=" * 70)
 
             # --------------------------------------------------
             # Generate structured video plan (8-10 scenes)
@@ -57,35 +64,58 @@ def run_pipeline(max_reels=1):
 
             script = generate_script(topic)
             scenes = script.get("scenes", [])
-            print(f"\nVideo plan generated — {len(scenes)} scenes")
+            hook_text = script.get("hook", "")
+            cta_text = script.get("cta", "")
+            style = script.get("style", "breaking_news")
+            music_mood = script.get("music_mood", "dramatic")
+
+            log.info(f"Video plan generated — {len(scenes)} scenes")
+            log.info(f"Style: {style} | Mood: {music_mood}")
+            log.debug(f"hook_text: {hook_text}")
+            log.debug(f"cta_text: {cta_text}")
+
+            # --------------------------------------------------
+            # Generate card background image
+            # --------------------------------------------------
+
+            log.info("Generating card background...")
+            card_background = generate_card_background(
+                style=style,
+                music_mood=music_mood,
+                output_dir="output/clips"
+            )
+
+            log.debug(f"card_background: {card_background}")
+
+            if card_background is None:
+                log.warning("Card background generation failed — cards will use black background")
 
             # --------------------------------------------------
             # Generate one audio file per scene
             # --------------------------------------------------
 
-            print("\nGenerating per-scene audio...")
+            log.info("Generating per-scene audio...")
             scene_audios = generate_voice_per_scene(script)
-            print(f"Scene audios: {len(scene_audios)}")
+            log.info(f"Scene audios generated: {len(scene_audios)}")
 
             # --------------------------------------------------
             # Generate Whisper subtitles from scene audio
             # --------------------------------------------------
 
-            print("\nGenerating subtitles via Whisper...")
+            log.info("Generating subtitles via Whisper...")
             subtitles = generate_subtitles(scene_audios)
+            log.info(f"Subtitles generated for {len(subtitles)} scenes")
 
             # --------------------------------------------------
             # Generate DALL-E images for scenes
-            # Falls back to Pexels/Pixabay if generation fails
             # --------------------------------------------------
 
-            print("\nGenerating scene images...")
+            log.info("Generating scene images...")
             dalle_assets = generate_images_for_scenes(
                 scenes,
                 headline=title
             )
 
-            # For any scene where DALL-E failed, try visuals downloader
             assets = []
 
             for i, (scene, dalle_asset) in enumerate(
@@ -94,8 +124,8 @@ def run_pipeline(max_reels=1):
                 if dalle_asset is not None:
                     assets.append(dalle_asset)
                 else:
-                    print(
-                        f"\nDALL-E failed for scene {i+1} "
+                    log.warning(
+                        f"DALL-E failed for scene {i+1} "
                         f"— trying Pexels/Pixabay fallback"
                     )
                     fallback = download_assets(
@@ -106,7 +136,6 @@ def run_pipeline(max_reels=1):
 
             # --------------------------------------------------
             # Pair scene_audios with assets
-            # hook and cta reuse first/last asset
             # --------------------------------------------------
 
             paired_audios = []
@@ -141,7 +170,7 @@ def run_pipeline(max_reels=1):
                     paired_assets.append(asset)
                     scene_index += 1
 
-            print(f"\nPaired {len(paired_audios)} segments:")
+            log.info(f"Paired {len(paired_audios)} segments:")
 
             for i, (sa, asset) in enumerate(
                 zip(paired_audios, paired_assets)
@@ -150,24 +179,27 @@ def run_pipeline(max_reels=1):
                     f"[{asset['source']}] {asset['media_type']}"
                     if asset else "missing"
                 )
-                print(
-                    f"  {i+1}. {asset_info} "
-                    f"← {sa['text'][:50]}"
-                )
+                log.info(f"  {i+1}. {asset_info} ← {sa['text'][:50]}")
 
             # --------------------------------------------------
-            # Render reel with per-scene sync + subtitles
+            # Render reel
             # --------------------------------------------------
 
-            print("\nRendering reel...")
+            log.info("Rendering reel...")
+            log.debug(f"Passing to create_video — hook_text='{hook_text}'")
+            log.debug(f"Passing to create_video — cta_text='{cta_text}'")
+            log.debug(f"Passing to create_video — card_background={card_background}")
 
             video_path = create_video(
                 scene_audios=paired_audios,
                 scenes=paired_assets,
-                subtitles=subtitles
+                subtitles=subtitles,
+                hook_text=hook_text,
+                cta_text=cta_text,
+                card_background=card_background
             )
 
-            print(f"\nReel created: {video_path}")
+            log.info(f"Reel created: {video_path}")
 
             # --------------------------------------------------
             # Save script to DB
@@ -191,19 +223,16 @@ def run_pipeline(max_reels=1):
             cur.close()
             conn.close()
 
-            print("Saved to database.")
+            log.info("Saved to database.")
 
         except Exception as e:
+            log.error(f"FAILED: {title}")
+            log.exception(e)
 
-            print("\nFAILED")
-            print(f"Topic: {title}")
-            print(f"Error: {e}")
-            traceback.print_exc()
-
-    print("\n")
-    print("=" * 70)
-    print("PIPELINE FINISHED")
-    print("=" * 70)
+    log.info("")
+    log.info("=" * 70)
+    log.info("PIPELINE FINISHED")
+    log.info("=" * 70)
 
 
 if __name__ == "__main__":
